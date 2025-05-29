@@ -238,6 +238,9 @@ def export_dataset(dataset_name,dim_MB,filename):
     
     
 if __name__ == "__main__":
+    if len(sys.argv) != 2 or not str(sys.argv[1]).isdigit():
+        print("Ricontrolla il parametro passato al programma (deve essere uno e deve essere un numero intero)!")
+        exit(-2)
     customer_table, terminal_table, transaction_table=generate_dataset(n_customers=CUSTOMERS_NUMBER,n_terminals=TERMINALS_NUMBER,nb_days=90,start_date="2025-01-01",r=20,d_MB=sys.argv[1]) #il primo parametro da linea di comando e' sempre il nome dello script
     transaction_table=add_frauds(customer_profiles_table=customer_table,terminal_profiles_table=terminal_table,transactions_df=transaction_table)
     export_dataset(dataset_name=customer_table,dim_MB=sys.argv[1],filename="customers_table")
