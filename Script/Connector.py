@@ -14,12 +14,18 @@ def import_dataset(connector_str,dim_mb):
     db = client["ProjectDB"]
     clients = db["client"]
     clients.insert_many(convert_from_json_to_dict("Dataset/customers_table_"+dim_mb+"MB.json"))
+    terminals = db["terminal"]
+    terminals.insert_many(convert_from_json_to_dict("Dataset/terminals_table_"+dim_mb+"MB.json"))
+    transactions = db["transaction"]
+    transactions.insert_many(convert_from_json_to_dict("Dataset.transactions_table_"+dim_mb+"MB.json"))
+    
     
     #MARK: ripetere quanto e' stato fatto sopra per anche i terminali e le transazioni
     
     
 
 if __name__ == "__main__":
+    conn_str="mongodb+srv://barbierinic01:Radice14@@newdbmsproject.gmi3sbg.mongodb.net/?retryWrites=true&w=majority&appName=NewDBMSProject"
     if len(sys.argv) != 3 or not str(sys.argv[2]).isdigit():
         print("ERRORE: bisogna passare la stringa di connessione a MongoDB da linea di comando e la dimensione, in MB, del dataset da utilizzare!")
         exit(-1)
