@@ -8,9 +8,9 @@ from pandarallel import pandarallel
 
 CUSTOMERS_NUMBER=2500
 TERMINALS_NUMBER=800
-DIR_OUTPUT="../Dataset/"
+DIR_OUTPUT="Dataset/"
 
-pandarallel.initialize(progress_bar=False)
+pandarallel.initialize(progress_bar=False) # funzione per inizializzare la computazione parallela
 
 def generate_dataset(n_customers = 1000, n_terminals = 200, nb_days=90, start_date="2018-04-01", r=5,d_MB=50):
     
@@ -40,7 +40,7 @@ def generate_dataset(n_customers = 1000, n_terminals = 200, nb_days=90, start_da
     # With Pandarallel
     counter=0
     while True: #MARK: ciclo do-while per la generazione delle transazioni in maniera da raggiungere la dimensione del dataset richiesta (aumento i giorni su cui spalmare le transazioni per riuscire a ridurre le iterazioni di generazione)
-        transactions_df=customer_profiles_table.groupby('CUSTOMER_ID').parallel_apply(lambda x : generate_transactions_table(x.iloc[0], nb_days=(nb_days+(counter*10)))).reset_index(drop=True)
+        transactions_df=customer_profiles_table.groupby('CUSTOMER_ID').parallel_apply(lambda x : generate_transactions_table(x.iloc[0], nb_days=(nb_days+(counter*10)),start_date=start_date)).reset_index(drop=True)
         actual_MB_dim += (sys.getsizeof(transactions_df)/1024/1024)
         if actual_MB_dim >= float(d_MB):
             break
@@ -56,6 +56,7 @@ def generate_dataset(n_customers = 1000, n_terminals = 200, nb_days=90, start_da
     # Reset indices, starting from 0
     transactions_df.reset_index(inplace=True,drop=True)
     transactions_df.reset_index(inplace=True)
+    transactions_df['TX_FRAUD']=False
     # TRANSACTION_ID are the dataframe indices, starting from 0
     transactions_df.rename(columns = {'index':'TRANSACTION_ID'}, inplace = True)
     
@@ -64,11 +65,11 @@ def generate_dataset(n_customers = 1000, n_terminals = 200, nb_days=90, start_da
 def add_frauds(customer_profiles_table, terminal_profiles_table, transactions_df):
     
     # By default, all transactions are genuine
-    transactions_df['TX_FRAUD']=0
+    transactions_df['TX_FRAUD']=False
     transactions_df['TX_FRAUD_SCENARIO']=0
     
     # Scenario 1: transazioni con valore > 220
-    transactions_df.loc[transactions_df.TX_AMOUNT>220, 'TX_FRAUD']=True
+    transactions_df.loc[transactions_df.TX_AMOUNT>220, 'TX_FRAUD']=1
     transactions_df.loc[transactions_df.TX_AMOUNT>220, 'TX_FRAUD_SCENARIO']=1
     nb_frauds_scenario_1=transactions_df.TX_FRAUD.sum()
     print("Number of frauds from scenario 1: "+str(nb_frauds_scenario_1))
@@ -222,19 +223,19 @@ def generate_transactions_table(customer_profile, start_date = "2018-04-01", nb_
                     
                         customer_transactions.append([time_tx+day*86400, day,
                                                       customer_profile.CUSTOMER_ID, 
-                                                      terminal_id, amount,False])
+                                                      terminal_id, amount, False])
             
     customer_transactions = pd.DataFrame(customer_transactions, columns=['TX_TIME_SECONDS', 'TX_TIME_DAYS', 'CUSTOMER_ID', 'TERMINAL_ID', 'TX_AMOUNT', 'TX_FRAUD'])
     
     if len(customer_transactions)>0:
-        customer_transactions['TX_DATETIME'] = pd.to_datetime(customer_transactions["TX_TIME_SECONDS"], unit='s', origin=start_date)
-        customer_transactions=customer_transactions[['TX_DATETIME','CUSTOMER_ID', 'TERMINAL_ID', 'TX_AMOUNT','TX_TIME_SECONDS', 'TX_TIME_DAYS']]
+        customer_transactions["TX_DATETIME"] = pd.to_datetime(customer_transactions["TX_TIME_SECONDS"], unit='s', origin=start_date)
+        customer_transactions=customer_transactions[['TX_DATETIME','CUSTOMER_ID', 'TERMINAL_ID', 'TX_AMOUNT','TX_TIME_SECONDS', 'TX_TIME_DAYS', 'TX_FRAUD']]
     
     return customer_transactions
 
 def export_dataset(dataset_name,dim_MB,filename):
-    dataset_name.to_pickle(DIR_OUTPUT+filename+"_"+str(dim_MB)+"MB.pkl",protocol=4)
-    dataset_name.to_json(DIR_OUTPUT+filename+"_"+str(dim_MB)+"MB.json")
+    pd.DataFrame(dataset_name).to_pickle(DIR_OUTPUT+filename+"_"+str(dim_MB)+"MB.pkl",protocol=4)
+    pd.DataFrame(dataset_name).to_json(DIR_OUTPUT+filename+"_"+str(dim_MB)+"MB.json",date_format="iso")
     
     
 if __name__ == "__main__":
@@ -242,7 +243,8 @@ if __name__ == "__main__":
         print("Ricontrolla il parametro passato al programma (deve essere uno e deve essere un numero intero)!")
         exit(-2)
     customer_table, terminal_table, transaction_table=generate_dataset(n_customers=CUSTOMERS_NUMBER,n_terminals=TERMINALS_NUMBER,nb_days=90,start_date="2025-01-01",r=20,d_MB=sys.argv[1]) #il primo parametro da linea di comando e' sempre il nome dello script
-    transaction_table=add_frauds(customer_profiles_table=customer_table,terminal_profiles_table=terminal_table,transactions_df=transaction_table)
+    #transaction_table=add_frauds(customer_profiles_table=customer_table,terminal_profiles_table=terminal_table,transactions_df=transaction_table)
+    print(os.getcwd())
     export_dataset(dataset_name=customer_table,dim_MB=sys.argv[1],filename="customers_table")
     export_dataset(dataset_name=terminal_table,dim_MB=sys.argv[1],filename="terminals_table")
     export_dataset(dataset_name=transaction_table,dim_MB=sys.argv[1],filename="transactions_table")
