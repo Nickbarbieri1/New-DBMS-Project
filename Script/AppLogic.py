@@ -155,6 +155,8 @@ if __name__ == "__main__":
         prev_month = current_month - 1
         prev_year = current_year
         
+    
+    #MARK: Togli i commenti dalle due linee sotto per far funzionare la query visto che non ci sono sufficienti transazioni in tutti i mesi del 2025
     #prev_month=1
     #current_month=2
         
@@ -229,7 +231,7 @@ if __name__ == "__main__":
     ]
 
     results = db.transactions.aggregate(fraud_pipeline)
-    #db.avg_amount_prev_month.drop()
+    db.avg_amount_prev_month.drop()
     
     # Stampa dei primi 100 risultati
     counter = 0
