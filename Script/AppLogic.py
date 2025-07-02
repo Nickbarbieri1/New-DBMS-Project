@@ -3,6 +3,7 @@ import Generate_dataset
 import json
 import os
 import sys
+from datetime import datetime
 import pymongo
 
 DB_NAME="ProjectDB"
@@ -12,6 +13,10 @@ if __name__ == "__main__":
     client = pymongo.MongoClient(CONN_STR)
     
     db = client[DB_NAME]
+    
+    print("")
+    print("QUERY 1")
+    print("")
     
     # QUERY 1
     # Step 1: Crea collezione temporanea con profilo cliente
@@ -130,3 +135,108 @@ if __name__ == "__main__":
             counter+=1
         else:
             break
+        
+        
+    print("")
+    print("QUERY 2")
+    print("")
+# QUERY 2 
+
+    # Procedo ad estrarre mese ed anno dalla data attuale
+    today = datetime.today()
+    current_month = today.month
+    current_year = today.year
+
+    # Imposto i valori corretti di mese ed anno prima di effettuare il filtraggio delle transazioni
+    if current_month == 1:
+        prev_month = 12
+        prev_year = current_year - 1
+    else:
+        prev_month = current_month - 1
+        prev_year = current_year
+        
+    #prev_month=1
+    #current_month=2
+        
+
+    # Pipeline per calcolare la media per terminale del mese precedente
+    avg_pipeline = [
+        {
+            "$addFields": {
+                "year": { "$year": { "$toDate": "$TX_DATETIME" } },
+                "month": { "$month": { "$toDate": "$TX_DATETIME" } }
+            }
+        },
+        {
+            "$match": {
+                "year": prev_year,
+                "month": prev_month
+            }
+        },
+        {
+            "$group": {
+                "_id": "$TERMINAL_ID",
+                "avg_prev_month": { "$avg": "$TX_AMOUNT" }
+            }
+        },
+        { "$out": "avg_amount_prev_month" }  # Salvo il risultato della pipeline in una collezione temporanea
+    ]
+
+    db.transactions.aggregate(avg_pipeline)
+    
+    fraud_pipeline = [
+        {
+            "$addFields": {
+                "year": { "$year": { "$toDate": "$TX_DATETIME" } },
+                "month": { "$month": { "$toDate": "$TX_DATETIME" } }
+            }
+        },
+        {
+            "$match": { 
+                "year": current_year,
+                "month": current_month
+            }
+        },
+        {
+            "$lookup": { #faccio il lookup con le transazioni della collezione temporanea
+                "from": "avg_amount_prev_month",
+                "localField": "TERMINAL_ID",
+                "foreignField": "_id",
+                "as": "avg_data"
+            }
+        },
+        { "$unwind": "$avg_data" },
+        {
+            "$addFields": { #aggiungo un campo che rappresenta il valore delle transazioni del mese precedente con gia' sommato il 20%
+                "threshold": { "$multiply": ["$avg_data.avg_prev_month", 1.2] }
+            }
+        },
+        {
+            "$match": {
+                "$expr": { "$gt": ["$TX_AMOUNT", "$threshold"] }
+            }
+        },
+        {
+            "$project": {
+                "_id": 0,
+                "TERMINAL_ID": 1,
+                "TX_AMOUNT": 1,
+                "TX_DATETIME": 1,
+                "avg_prev_month": "$avg_data.avg_prev_month",
+                "threshold": 1
+            }
+        }
+    ]
+
+    results = db.transactions.aggregate(fraud_pipeline)
+    #db.avg_amount_prev_month.drop()
+    
+    # Stampa dei primi 100 risultati
+    counter = 0
+    for r in results:
+        if counter < 100:
+            print(r)
+            counter+=1
+        else:
+            break
+    
