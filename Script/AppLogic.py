@@ -1,3 +1,4 @@
+from itertools import combinations
 import Connector
 import Generate_dataset
 import json
@@ -8,6 +9,43 @@ import pymongo
 
 DB_NAME="ProjectDB"
 CONN_STR="mongodb://localhost:27017/"
+
+def get_period_of_day(t):
+    hour = t.hour()
+    
+    if 6<= hour <12:
+        return "morning"
+    elif 12 <= hour < 18:
+        return "afternoon"
+    elif 18 <= hour < 22:
+        return "evening"
+    else:
+        return "night"
+
+def update_ops(db):
+    
+    products = ["high-tech","food","clothing","consumable","other"]
+    #UPDATE 1: aggiunta campo "period of the day"
+    #UPDATE 2:aggiunta campo "kind_product"
+    for tnx in db.transactions.find():
+        period = get_period_of_day(tnx["TX_DATETIME"])
+        db.transactions.update_one(
+            {"_id": tnx["_id"]},
+            {"$set": {"period_of_day": period}}
+        )
+        
+        index = randrange(0,products.count)
+        db.transactions.update_one(
+            {"_id": tnx["_id"]},
+            {"$set": {"product_kind": products[index]}}
+        )
+        
+    
+   
+    
+    
+    
+    
 
 if __name__ == "__main__":
     client = pymongo.MongoClient(CONN_STR)
@@ -143,7 +181,7 @@ if __name__ == "__main__":
 # QUERY 2 
 
     # Procedo ad estrarre mese ed anno dalla data attuale
-    today = datetime.today()
+    today = datetime(2025,2,1) # specifico la data che voglio, cosi' da poter gestire in maniera migliore i risultati della query
     current_month = today.month
     current_year = today.year
 
@@ -242,3 +280,227 @@ if __name__ == "__main__":
         else:
             break
     
+    
+#QUERY 3
+
+    print("")
+    print("QUERY 3")
+    print("")
+
+    starting_customer_id = input("Inserisci l'identificativo dell'utente interessato: ")
+
+    """
+    pipeline = [
+        # Step 1: terminali usati da u
+        {
+            "$match": { "CUSTOMER_ID": starting_customer_id }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "terminals_u": { "$addToSet": "$TERMINAL_ID" }
+            }
+        },
+
+        # Step 2: trova u2 che hanno usato gli stessi terminali
+        {
+            "$lookup": {
+                "from": "transactions",
+                "let": { "terminals": "$terminals_u" },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    { "$in": ["$TERMINAL_ID", "$$terminals"] },
+                                    { "$ne": ["$CUSTOMER_ID", starting_customer_id] }
+                                ]
+                            }
+                        }
+                    },
+                    { "$project": { "_id": 0, "CUSTOMER_ID": 1, "TERMINAL_ID": 1 } }
+                ],
+                "as": "u2_links"
+            }
+        },
+
+        # Step 3: ottieni tutti terminali usati dagli u2
+        { "$unwind": "$u2_links" },
+
+        {
+            "$group": {
+                "_id": "$u2_links.CUSTOMER_ID",
+                "u2_id": { "$first": "$u2_links.CUSTOMER_ID" },
+                "terminals_u2": { "$addToSet": "$u2_links.TERMINAL_ID" }
+            }
+        },
+
+        # Step 4: trova u3 che condividono terminali con ciascun u2
+        {
+            "$lookup": {
+                "from": "transactions",
+                "let": { "terminals": "$terminals_u2", "u2_id": "$u2_id" },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    { "$in": ["$TERMINAL_ID", "$$terminals"] },
+                                    { "$ne": ["$CUSTOMER_ID", "$$u2_id"] },
+                                    { "$ne": ["$CUSTOMER_ID", starting_customer_id] }
+                                ]
+                            }
+                        }
+                    },
+                    { "$project": { "_id": 0, "CUSTOMER_ID": 1, "TERMINAL_ID": 1 } }
+                ],
+                "as": "u3_links"
+            }
+        },
+        { "$unwind": "$u3_links" },
+
+        {
+            "$group": {
+                "_id": "$u3_links.CUSTOMER_ID",
+                "u3_id": { "$first": "$u3_links.CUSTOMER_ID" },
+                "terminals_u3": { "$addToSet": "$u3_links.TERMINAL_ID" },
+                "visited_u2": { "$addToSet": "$u2_id" }
+            }
+        },
+
+        # Step 5: trova u4 che condividono terminali con ciascun u3
+        {
+            "$lookup": {
+                "from": "transactions",
+                "let": {
+                    "terminals": "$terminals_u3",
+                    "u3_id": "$u3_id",
+                    "visited_u2": "$visited_u2"
+                },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    { "$in": ["$TERMINAL_ID", "$$terminals"] },
+                                    { "$ne": ["$CUSTOMER_ID", "$$u3_id"] },
+                                    { "$ne": ["$CUSTOMER_ID", starting_customer_id] },
+                                    { "$not": { "$in": ["$CUSTOMER_ID", "$$visited_u2"] } }
+                                ]
+                            }
+                        }
+                    },
+                    { "$project": { "_id": 0, "CUSTOMER_ID": 1 } }
+                ],
+                "as": "u4_links"
+            }
+        },
+        { "$unwind": "$u4_links" },
+
+        # Step 6: restituisci i CC3
+        {
+            "$group": {
+                "_id": starting_customer_id,
+                "CC3": { "$addToSet": "$u4_links.CUSTOMER_ID" }
+            }
+        }
+    ]
+
+    results = list(db.transactions.aggregate(pipeline))
+    """
+    
+    # 1. Costruzione customer_links (grafo cliente-cliente)
+    pipeline_links = [
+        {
+            '$lookup': {
+                'from': 'transactions', 
+                'localField': 'TERMINAL_ID', 
+                'foreignField': 'TERMINAL_ID', 
+                'as': 'customers1'
+            }
+        }, {
+            '$lookup': {
+                'from': 'transactions', 
+                'localField': 'TERMINAL_ID', 
+                'foreignField': 'TERMINAL_ID', 
+                'as': 'customers2'
+            }
+        }, {
+            '$unwind': {
+                'path': '$customers1', 
+                'preserveNullAndEmptyArrays': False
+            }
+        }, {
+            '$unwind': {
+                'path': '$customers2', 
+                'preserveNullAndEmptyArrays': False
+            }
+        }, {
+            '$project': {
+                'TERMINAL_ID': 1, 
+                'customers1.CUSTOMER_ID': 1, 
+                'customers2.CUSTOMER_ID': 1
+            }
+        }, {
+            '$match': {
+                '$expr': {
+                    '$ne': [
+                        '$customers1.CUSTOMER_ID', '$customers2.CUSTOMER_ID'
+                    ]
+                }
+            }
+        }, {
+            '$limit': 10000
+        }, {
+            '$project': {
+                'to': '$customers1.CUSTOMER_ID', 
+                'from': '$customers2.CUSTOMER_ID', 
+                'terminal': '$TERMINAL_ID', 
+                '_id': 0
+            }
+        }, {
+            '$merge': {
+                'into': 'user_links', 
+                'whenMatched': 'replace', 
+                'whenNotMatched': 'insert'
+            }
+        }
+    ]
+
+    # Esegui costruzione customer_links
+    db.transactions.aggregate(pipeline_links)
+    
+    
+    cc3_pipeline = [
+        { "$match": { "from": starting_customer_id } },
+        {
+            "$graphLookup": {
+                "from": "customer_links",
+                "startWith": "$to",
+                "connectFromField": "to",
+                "connectToField": "from",
+                "as": "cc3_chain",
+                "maxDepth": 2,  # Profondità 3 clienti = 2 passaggi
+                "depthField": "depth",
+                "restrictSearchWithMatch": { "to": { "$ne": starting_customer_id } }
+            }
+        },
+        {
+            "$project": {
+            "_id": 0,
+            "cc3_users": {
+                "$filter": {
+                "input": "$cc3_users",
+                "as": "user",
+                "cond": { "$eq": ["$$user.depth", 1] } # Solo profondità 2 = distanza 3
+                }
+            }
+            }
+        }
+    ]
+
+    results = list(db.customer_links.aggregate(cc3_pipeline))
+    
+    print(results)
+    
+    update_ops(db=db)
