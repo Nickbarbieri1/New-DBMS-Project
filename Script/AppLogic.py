@@ -5,13 +5,15 @@ import json
 import os
 import sys
 from datetime import datetime
+from random import randrange
 import pymongo
 
 DB_NAME="ProjectDB"
 CONN_STR="mongodb://localhost:27017/"
 
 def get_period_of_day(t):
-    hour = t.hour()
+    t = datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%f")
+    hour = t.hour
     
     if 6<= hour <12:
         return "morning"
@@ -35,7 +37,7 @@ def update_ops(db):
             {"$set": {"period_of_day": period}}
         )
         
-        index = randrange(0,products.count)
+        index = randrange(0,len(products))
         db.transactions.update_one(
             {"_id": tnx["_id"]},
             {"$set": {"product_kind": products[index]}}
@@ -51,7 +53,7 @@ def update_ops(db):
     pipeline = [
         {
             "$group": {
-                "_id": {"user": "$user_id", "terminal": "$terminal_id"},
+                "_id": {"user": "$CUSTOMER_ID", "terminal": "$TERMINAL_ID"}, 
                 "avgFeeling": {"$avg": "$security_index"},
                 "count": {"$sum": 1}
             }
@@ -60,6 +62,8 @@ def update_ops(db):
     ]
     
     results = list(db.transactions.aggregate(pipeline))
+    
+    print("SONO ARRIVATO FINO A QUI!")
     
     by_terminal = {}
     for r in results:
@@ -73,12 +77,16 @@ def update_ops(db):
                 pairs.add(tuple(sorted([u1, u2])))
                 
     buying_friends = db["buying_friends"]
+    counter = 0
     for u1, u2 in pairs:
+        if counter == 10000:
+            break
         buying_friends.update_one(
             {"user_1": u1, "user_2": u2},
             {"$setOnInsert": {"user_1": u1, "user_2": u2}},
             upsert=True
         )
+        counter+=1
     
    
     
