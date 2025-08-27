@@ -26,7 +26,8 @@ def update_ops(db):
     
     products = ["high-tech","food","clothing","consumable","other"]
     #UPDATE 1: aggiunta campo "period of the day"
-    #UPDATE 2:aggiunta campo "kind_product"
+    #UPDATE 2: aggiunta campo "kind_product"
+    #UPDATE 3: aggiunta campo "security_index"
     for tnx in db.transactions.find():
         period = get_period_of_day(tnx["TX_DATETIME"])
         db.transactions.update_one(
@@ -40,6 +41,44 @@ def update_ops(db):
             {"$set": {"product_kind": products[index]}}
         )
         
+        sec_val = randrange(1,6)
+        db.transactions.update_one(
+            {"_id": tnx["_id"]},
+            {"$set": {"security_index": sec_val}}
+        )
+        
+    #UPDATE 4: creazione collezione "buying_friends" in base al livello di sicurezza ed alle transazioni effettuate
+    pipeline = [
+        {
+            "$group": {
+                "_id": {"user": "$user_id", "terminal": "$terminal_id"},
+                "avgFeeling": {"$avg": "$security_index"},
+                "count": {"$sum": 1}
+            }
+        },
+        {"$match": {"count": {"$gte": 3}}}
+    ]
+    
+    results = list(db.transactions.aggregate(pipeline))
+    
+    by_terminal = {}
+    for r in results:
+        term = r["_id"]["terminal"]
+        by_terminal.setdefault(term, []).append((r["_id"]["user"], r["avgFeeling"]))
+        
+    pairs = set()
+    for term, users in by_terminal.items():
+        for (u1, f1), (u2, f2) in combinations(users, 2):
+            if abs(f1 - f2) < 1:
+                pairs.add(tuple(sorted([u1, u2])))
+                
+    buying_friends = db["buying_friends"]
+    for u1, u2 in pairs:
+        buying_friends.update_one(
+            {"user_1": u1, "user_2": u2},
+            {"$setOnInsert": {"user_1": u1, "user_2": u2}},
+            upsert=True
+        )
     
    
     
@@ -51,6 +90,8 @@ if __name__ == "__main__":
     client = pymongo.MongoClient(CONN_STR)
     
     db = client[DB_NAME]
+    
+    update_ops(db=db)
     
     print("")
     print("QUERY 1")
@@ -504,3 +545,4 @@ if __name__ == "__main__":
     print(results)
     
     update_ops(db=db)
+    
