@@ -63,7 +63,6 @@ def update_ops(db):
     
     results = list(db.transactions.aggregate(pipeline))
     
-    print("SONO ARRIVATO FINO A QUI!")
     
     by_terminal = {}
     for r in results:

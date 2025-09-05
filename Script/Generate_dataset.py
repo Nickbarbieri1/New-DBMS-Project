@@ -6,8 +6,8 @@ import pandas as pd
 from pandarallel import pandarallel
 
 
-CUSTOMERS_NUMBER=2500
-TERMINALS_NUMBER=800
+CUSTOMERS_NUMBER=1000
+TERMINALS_NUMBER=200
 DIR_OUTPUT="Dataset/"
 
 pandarallel.initialize(progress_bar=False) # funzione per inizializzare la computazione parallela
