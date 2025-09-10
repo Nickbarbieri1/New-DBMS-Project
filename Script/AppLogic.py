@@ -3,6 +3,7 @@ import Connector
 import Generate_dataset
 import json
 import os
+from collections import defaultdict, deque
 import sys
 from datetime import datetime
 from random import randrange
@@ -27,22 +28,25 @@ def get_period_of_day(t):
 def update_ops(db):
     
     products = ["high-tech","food","clothing","consumable","other"]
-    #UPDATE 1: aggiunta campo "period of the day"
-    #UPDATE 2: aggiunta campo "kind_product"
-    #UPDATE 3: aggiunta campo "security_index"
+    
+    
+    
     for tnx in db.transactions.find():
+        #UPDATE 1: aggiunta campo "period of the day"
         period = get_period_of_day(tnx["TX_DATETIME"])
         db.transactions.update_one(
             {"_id": tnx["_id"]},
             {"$set": {"period_of_day": period}}
         )
         
+        #UPDATE 2: aggiunta campo "kind_product"
         index = randrange(0,len(products))
         db.transactions.update_one(
             {"_id": tnx["_id"]},
             {"$set": {"product_kind": products[index]}}
         )
         
+        #UPDATE 3: aggiunta campo "security_index"
         sec_val = randrange(1,6)
         db.transactions.update_one(
             {"_id": tnx["_id"]},
@@ -80,16 +84,13 @@ def update_ops(db):
     for u1, u2 in pairs:
         if counter == 10000:
             break
-        buying_friends.update_one(
-            {"user_1": u1, "user_2": u2},
-            {"$setOnInsert": {"user_1": u1, "user_2": u2}},
-            upsert=True
-        )
-        counter+=1
-    
-   
-    
-    
+        else:
+            buying_friends.update_one(
+                {"user_1": u1, "user_2": u2},
+                {"$setOnInsert": {"user_1": u1, "user_2": u2}},
+                upsert=True
+            )
+            counter+=1
     
     
 
@@ -98,7 +99,6 @@ if __name__ == "__main__":
     
     db = client[DB_NAME]
     
-    update_ops(db=db)
     
     print("")
     print("QUERY 1")
@@ -457,6 +457,7 @@ if __name__ == "__main__":
     results = list(db.transactions.aggregate(pipeline))
     """
     
+    """
     # 1. Costruzione customer_links (grafo cliente-cliente)
     pipeline_links = [
         {
@@ -550,6 +551,59 @@ if __name__ == "__main__":
     results = list(db.customer_links.aggregate(cc3_pipeline))
     
     print(results)
+    
+    """
+    
+    def get_cck(user_id, k,db):
+        """
+        Restituisce il set di utenti a distanza esatta k da user_id (CCk),
+        dove esiste un arco u--v se u e v hanno condiviso un terminale.
+        I risultati sono restituiti come stringhe degli id.
+        """
+        # 1) costruisci terminal -> lista utenti
+        pipeline = [
+            {"$group": {"_id": "$TERMINAL_ID", "users": {"$addToSet": "$CUSTOMER_ID"}}}
+        ]
+        cursor = db.transactions.aggregate(pipeline)
+
+        # 2) costruisci grafo utente -> set(utenti)
+        adj = defaultdict(set)
+        for doc in cursor:
+            users = doc.get("users", [])
+            users_s = [str(u) for u in users]   # normalizziamo a stringhe per evitare mismatch
+            for u in users_s:
+                # aggiungi tutti gli altri utenti connessi tramite questo terminale
+                adj[u].update(v for v in users_s if v != u)
+
+        start = str(user_id)
+        if start not in adj:
+            print(adj)
+            print("Esco qui!")
+            return set()  # utente senza connessioni
+
+        # 3) BFS fino alla profondità k
+        visited = {start}
+        frontier = {start}
+        depth = 0
+
+        while depth < k:
+            next_frontier = set()
+            for u in frontier:
+                for neigh in adj.get(u, ()):
+                    if neigh not in visited:
+                        next_frontier.add(neigh)
+            visited.update(next_frontier)
+            frontier = next_frontier
+            depth += 1
+            if not frontier:
+                break
+
+        # frontier contiene i nodi a distanza esatta k
+        return frontier
+
+    # Esempio d'uso:
+    cc3 = get_cck(starting_customer_id, 3,db=db)
+    print("CC3("+starting_customer_id+"): ", cc3)
     
     update_ops(db=db)
     
