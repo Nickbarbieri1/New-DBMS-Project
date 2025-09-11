@@ -1,16 +1,102 @@
+from concurrent.futures import ProcessPoolExecutor
 from itertools import combinations
 import Connector
+import pandas as pd
 import Generate_dataset
 import json
 import os
+import time
 from collections import defaultdict, deque
 import sys
 from datetime import datetime
 from random import randrange
 import pymongo
+from pandarallel import pandarallel
 
 DB_NAME="ProjectDB"
 CONN_STR="mongodb://localhost:27017/"
+
+pandarallel.initialize(progress_bar=False)
+
+def get_cck(user_id, k,db):
+        """
+        Restituisce il set di utenti a distanza esatta k da user_id (CCk),
+        dove esiste un arco u--v se u e v hanno condiviso un terminale.
+        I risultati sono restituiti come stringhe degli id.
+        """
+        # 1) costruisci terminal -> lista utenti
+        pipeline = [
+            {"$group": {"_id": "$TERMINAL_ID", "users": {"$addToSet": "$CUSTOMER_ID"}}}
+        ]
+        cursor = db.transactions.aggregate(pipeline)
+
+        # 2) costruisci grafo utente -> set(utenti)
+        adj = defaultdict(set)
+        for doc in cursor:
+            users = doc.get("users", [])
+            users_s = [str(u) for u in users]   # normalizziamo a stringhe per evitare mismatch
+            for u in users_s:
+                # aggiungi tutti gli altri utenti connessi tramite questo terminale
+                adj[u].update(v for v in users_s if v != u)
+
+        start = str(user_id)
+        if start not in adj:
+            print(adj)
+            print("Esco qui!")
+            return set()  # utente senza connessioni
+
+        # 3) BFS fino alla profondità k
+        visited = {start}
+        frontier = {start}
+        depth = 0
+
+        while depth < k:
+            next_frontier = set()
+            for u in frontier:
+                for neigh in adj.get(u, ()):
+                    if neigh not in visited:
+                        next_frontier.add(neigh)
+            visited.update(next_frontier)
+            frontier = next_frontier
+            depth += 1
+            if not frontier:
+                break
+
+        # frontier contiene i nodi a distanza esatta k
+        return frontier
+    
+def process_users(users):
+    pairs = set()
+    for (u1, f1), (u2, f2) in combinations(users, 2):
+        if abs(f1 - f2) < 1:
+            pairs.add(tuple(sorted((u1, u2)))) #il fatto di ordinarli impedisce di avere documenti duplicati nella collezione (u1 -> u2 e u2 -> u1)
+    return pairs
+
+def find_and_store_pairs_pandarallel(by_terminal, db):
+    # trasforma in DataFrame per usare pandarallel
+    df = pd.DataFrame(
+        [(term, users) for term, users in by_terminal.items()],
+        columns=["terminal", "users"]
+    )
+
+    # calcolo parallelo dei pairs per ogni terminale
+    df["pairs"] = df["users"].parallel_apply(process_users)
+
+    # unione dei risultati
+    all_pairs = set().union(*df["pairs"])
+
+    # scrittura in bulk su MongoDB
+    buying_friends = db["buying_friends"]
+    ops = [
+        pymongo.UpdateOne(
+            {"user_1": u1, "user_2": u2}, #filtro
+            {"$setOnInsert": {"user_1": u1, "user_2": u2}}, #updateCommand
+            upsert=True
+        )
+        for u1, u2 in all_pairs
+    ]
+    if ops:
+        buying_friends.bulk_write(ops, ordered=False,bypass_document_validation=True)
 
 def get_period_of_day(t):
     t = datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%f")
@@ -29,28 +115,19 @@ def update_ops(db):
     
     products = ["high-tech","food","clothing","consumable","other"]
     
-    
-    
+    start_time=time.time()
     for tnx in db.transactions.find():
         #UPDATE 1: aggiunta campo "period of the day"
         period = get_period_of_day(tnx["TX_DATETIME"])
-        db.transactions.update_one(
-            {"_id": tnx["_id"]},
-            {"$set": {"period_of_day": period}}
-        )
         
         #UPDATE 2: aggiunta campo "kind_product"
         index = randrange(0,len(products))
-        db.transactions.update_one(
-            {"_id": tnx["_id"]},
-            {"$set": {"product_kind": products[index]}}
-        )
         
         #UPDATE 3: aggiunta campo "security_index"
         sec_val = randrange(1,6)
         db.transactions.update_one(
             {"_id": tnx["_id"]},
-            {"$set": {"security_index": sec_val}}
+            {"$set": {"security_index": sec_val,"product_kind": products[index],"period_of_day": period}}
         )
         
     #UPDATE 4: creazione collezione "buying_friends" in base al livello di sicurezza ed alle transazioni effettuate
@@ -73,6 +150,7 @@ def update_ops(db):
         term = r["_id"]["terminal"]
         by_terminal.setdefault(term, []).append((r["_id"]["user"], r["avgFeeling"]))
         
+    """
     pairs = set()
     for term, users in by_terminal.items():
         for (u1, f1), (u2, f2) in combinations(users, 2):
@@ -80,19 +158,16 @@ def update_ops(db):
                 pairs.add(tuple(sorted([u1, u2])))
                 
     buying_friends = db["buying_friends"]
-    counter = 0
+    
     for u1, u2 in pairs:
-        if counter == 10000:
-            break
-        else:
-            buying_friends.update_one(
-                {"user_1": u1, "user_2": u2},
-                {"$setOnInsert": {"user_1": u1, "user_2": u2}},
-                upsert=True
-            )
-            counter+=1
-    
-    
+        buying_friends.update_one(
+            {"user_1": u1, "user_2": u2},
+            {"$setOnInsert": {"user_1": u1, "user_2": u2}},
+            upsert=True
+        )
+        """
+    find_and_store_pairs_pandarallel(by_terminal=by_terminal,db=db)
+    print("Tempo per eseguire tutti gli aggiornamenti: {0:.2}s".format(time.time()-start_time))
 
 if __name__ == "__main__":
     client = pymongo.MongoClient(CONN_STR)
@@ -337,273 +412,43 @@ if __name__ == "__main__":
 
     starting_customer_id = input("Inserisci l'identificativo dell'utente interessato: ")
 
-    """
+    # Esempio d'uso:
+    cc3 = get_cck(starting_customer_id, 3,db=db)
+    print("CC3("+starting_customer_id+"): ", cc3)
+    
+#QUERY 4
+
+    print("\nQUERY 4\n")
+    
     pipeline = [
-        # Step 1: terminali usati da u
-        {
-            "$match": { "CUSTOMER_ID": starting_customer_id }
-        },
         {
             "$group": {
-                "_id": None,
-                "terminals_u": { "$addToSet": "$TERMINAL_ID" }
-            }
-        },
-
-        # Step 2: trova u2 che hanno usato gli stessi terminali
-        {
-            "$lookup": {
-                "from": "transactions",
-                "let": { "terminals": "$terminals_u" },
-                "pipeline": [
-                    {
-                        "$match": {
-                            "$expr": {
-                                "$and": [
-                                    { "$in": ["$TERMINAL_ID", "$$terminals"] },
-                                    { "$ne": ["$CUSTOMER_ID", starting_customer_id] }
-                                ]
-                            }
-                        }
-                    },
-                    { "$project": { "_id": 0, "CUSTOMER_ID": 1, "TERMINAL_ID": 1 } }
-                ],
-                "as": "u2_links"
-            }
-        },
-
-        # Step 3: ottieni tutti terminali usati dagli u2
-        { "$unwind": "$u2_links" },
-
-        {
-            "$group": {
-                "_id": "$u2_links.CUSTOMER_ID",
-                "u2_id": { "$first": "$u2_links.CUSTOMER_ID" },
-                "terminals_u2": { "$addToSet": "$u2_links.TERMINAL_ID" }
-            }
-        },
-
-        # Step 4: trova u3 che condividono terminali con ciascun u2
-        {
-            "$lookup": {
-                "from": "transactions",
-                "let": { "terminals": "$terminals_u2", "u2_id": "$u2_id" },
-                "pipeline": [
-                    {
-                        "$match": {
-                            "$expr": {
-                                "$and": [
-                                    { "$in": ["$TERMINAL_ID", "$$terminals"] },
-                                    { "$ne": ["$CUSTOMER_ID", "$$u2_id"] },
-                                    { "$ne": ["$CUSTOMER_ID", starting_customer_id] }
-                                ]
-                            }
-                        }
-                    },
-                    { "$project": { "_id": 0, "CUSTOMER_ID": 1, "TERMINAL_ID": 1 } }
-                ],
-                "as": "u3_links"
-            }
-        },
-        { "$unwind": "$u3_links" },
-
-        {
-            "$group": {
-                "_id": "$u3_links.CUSTOMER_ID",
-                "u3_id": { "$first": "$u3_links.CUSTOMER_ID" },
-                "terminals_u3": { "$addToSet": "$u3_links.TERMINAL_ID" },
-                "visited_u2": { "$addToSet": "$u2_id" }
-            }
-        },
-
-        # Step 5: trova u4 che condividono terminali con ciascun u3
-        {
-            "$lookup": {
-                "from": "transactions",
-                "let": {
-                    "terminals": "$terminals_u3",
-                    "u3_id": "$u3_id",
-                    "visited_u2": "$visited_u2"
-                },
-                "pipeline": [
-                    {
-                        "$match": {
-                            "$expr": {
-                                "$and": [
-                                    { "$in": ["$TERMINAL_ID", "$$terminals"] },
-                                    { "$ne": ["$CUSTOMER_ID", "$$u3_id"] },
-                                    { "$ne": ["$CUSTOMER_ID", starting_customer_id] },
-                                    { "$not": { "$in": ["$CUSTOMER_ID", "$$visited_u2"] } }
-                                ]
-                            }
-                        }
-                    },
-                    { "$project": { "_id": 0, "CUSTOMER_ID": 1 } }
-                ],
-                "as": "u4_links"
-            }
-        },
-        { "$unwind": "$u4_links" },
-
-        # Step 6: restituisci i CC3
-        {
-            "$group": {
-                "_id": starting_customer_id,
-                "CC3": { "$addToSet": "$u4_links.CUSTOMER_ID" }
-            }
-        }
-    ]
-
-    results = list(db.transactions.aggregate(pipeline))
-    """
-    
-    """
-    # 1. Costruzione customer_links (grafo cliente-cliente)
-    pipeline_links = [
-        {
-            '$lookup': {
-                'from': 'transactions', 
-                'localField': 'TERMINAL_ID', 
-                'foreignField': 'TERMINAL_ID', 
-                'as': 'customers1'
-            }
-        }, {
-            '$lookup': {
-                'from': 'transactions', 
-                'localField': 'TERMINAL_ID', 
-                'foreignField': 'TERMINAL_ID', 
-                'as': 'customers2'
-            }
-        }, {
-            '$unwind': {
-                'path': '$customers1', 
-                'preserveNullAndEmptyArrays': False
-            }
-        }, {
-            '$unwind': {
-                'path': '$customers2', 
-                'preserveNullAndEmptyArrays': False
-            }
-        }, {
-            '$project': {
-                'TERMINAL_ID': 1, 
-                'customers1.CUSTOMER_ID': 1, 
-                'customers2.CUSTOMER_ID': 1
-            }
-        }, {
-            '$match': {
-                '$expr': {
-                    '$ne': [
-                        '$customers1.CUSTOMER_ID', '$customers2.CUSTOMER_ID'
-                    ]
+                "_id": "$period_of_day",
+                "totalTransactions": {"$sum": 1},
+                "fraudulentTransactions": {
+                    "$sum": {"$cond": ["$TX_FRAUD", 1, 0]}
                 }
-            }
-        }, {
-            '$limit': 10000
-        }, {
-            '$project': {
-                'to': '$customers1.CUSTOMER_ID', 
-                'from': '$customers2.CUSTOMER_ID', 
-                'terminal': '$TERMINAL_ID', 
-                '_id': 0
-            }
-        }, {
-            '$merge': {
-                'into': 'user_links', 
-                'whenMatched': 'replace', 
-                'whenNotMatched': 'insert'
-            }
-        }
-    ]
-
-    # Esegui costruzione customer_links
-    db.transactions.aggregate(pipeline_links)
-    
-    
-    cc3_pipeline = [
-        { "$match": { "from": starting_customer_id } },
-        {
-            "$graphLookup": {
-                "from": "customer_links",
-                "startWith": "$to",
-                "connectFromField": "to",
-                "connectToField": "from",
-                "as": "cc3_chain",
-                "maxDepth": 2,  # Profondità 3 clienti = 2 passaggi
-                "depthField": "depth",
-                "restrictSearchWithMatch": { "to": { "$ne": starting_customer_id } }
             }
         },
         {
             "$project": {
-            "_id": 0,
-            "cc3_users": {
-                "$filter": {
-                "input": "$cc3_users",
-                "as": "user",
-                "cond": { "$eq": ["$$user.depth", 1] } # Solo profondità 2 = distanza 3
+                "_id": 0,
+                "periodOfDay": "$_id",
+                "totalTransactions": 1,
+                "avgFraudulentTransactions": {
+                    "$divide": ["$fraudulentTransactions", "$totalTransactions"]
                 }
-            }
             }
         }
     ]
 
-    results = list(db.customer_links.aggregate(cc3_pipeline))
+    result = list(db.transactions.aggregate(pipeline))
     
-    print(results)
+    for elem in result:
+        print(elem)
     
-    """
     
-    def get_cck(user_id, k,db):
-        """
-        Restituisce il set di utenti a distanza esatta k da user_id (CCk),
-        dove esiste un arco u--v se u e v hanno condiviso un terminale.
-        I risultati sono restituiti come stringhe degli id.
-        """
-        # 1) costruisci terminal -> lista utenti
-        pipeline = [
-            {"$group": {"_id": "$TERMINAL_ID", "users": {"$addToSet": "$CUSTOMER_ID"}}}
-        ]
-        cursor = db.transactions.aggregate(pipeline)
-
-        # 2) costruisci grafo utente -> set(utenti)
-        adj = defaultdict(set)
-        for doc in cursor:
-            users = doc.get("users", [])
-            users_s = [str(u) for u in users]   # normalizziamo a stringhe per evitare mismatch
-            for u in users_s:
-                # aggiungi tutti gli altri utenti connessi tramite questo terminale
-                adj[u].update(v for v in users_s if v != u)
-
-        start = str(user_id)
-        if start not in adj:
-            print(adj)
-            print("Esco qui!")
-            return set()  # utente senza connessioni
-
-        # 3) BFS fino alla profondità k
-        visited = {start}
-        frontier = {start}
-        depth = 0
-
-        while depth < k:
-            next_frontier = set()
-            for u in frontier:
-                for neigh in adj.get(u, ()):
-                    if neigh not in visited:
-                        next_frontier.add(neigh)
-            visited.update(next_frontier)
-            frontier = next_frontier
-            depth += 1
-            if not frontier:
-                break
-
-        # frontier contiene i nodi a distanza esatta k
-        return frontier
-
-    # Esempio d'uso:
-    cc3 = get_cck(starting_customer_id, 3,db=db)
-    print("CC3("+starting_customer_id+"): ", cc3)
+    
     
     update_ops(db=db)
     
