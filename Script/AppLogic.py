@@ -179,6 +179,8 @@ if __name__ == "__main__":
     print("QUERY 1")
     print("")
     
+    start_q1=time.time()
+    
     # QUERY 1
     # Step 1: Crea collezione temporanea con profilo cliente
     pipeline_profile = [
@@ -282,11 +284,15 @@ if __name__ == "__main__":
             }
         }
     ]
+    
+    
 
     # Esecuzione della query
     results = db.customer_profiles.aggregate(pipeline_match)
     # Faccio in modo di cancellare la collezione temporanea una volta finita la query
     db.customer_profiles.drop()
+    
+    print("Time to solve query 1 --> {0:.2}s".format(time.time()-start_q1))
 
     # Stampa dei primi 100 risultati
     counter = 0
@@ -301,7 +307,9 @@ if __name__ == "__main__":
     print("")
     print("QUERY 2")
     print("")
-# QUERY 2 
+    # QUERY 2 
+    
+    start_q2=time.time()
 
     # Procedo ad estrarre mese ed anno dalla data attuale
     today = datetime(2025,2,1) # specifico la data che voglio, cosi' da poter gestire in maniera migliore i risultati della query
@@ -394,6 +402,8 @@ if __name__ == "__main__":
     results = db.transactions.aggregate(fraud_pipeline)
     db.avg_amount_prev_month.drop()
     
+    print("Time to solve query 2 --> {0:.2}s".format(time.time()-start_q2))
+    
     # Stampa dei primi 100 risultati
     counter = 0
     for r in results:
@@ -411,14 +421,19 @@ if __name__ == "__main__":
     print("")
 
     starting_customer_id = input("Inserisci l'identificativo dell'utente interessato: ")
+    
+    start_q3=time.time()
 
     # Esempio d'uso:
     cc3 = get_cck(starting_customer_id, 3,db=db)
+    
+    print("Time to solve query 3 --> {0:.2}s".format(time.time()-start_q3))
     print("CC3("+starting_customer_id+"): ", cc3)
     
 #QUERY 4
 
     print("\nQUERY 4\n")
+    start_q4=time.time()
     
     pipeline = [
         {
@@ -444,11 +459,10 @@ if __name__ == "__main__":
 
     result = list(db.transactions.aggregate(pipeline))
     
+    print("Time to solve query 4 --> {0:.2}s".format(time.time()-start_q4))
+    
     for elem in result:
         print(elem)
-    
-    
-    
     
     update_ops(db=db)
     
