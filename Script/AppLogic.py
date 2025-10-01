@@ -170,6 +170,9 @@ def update_ops(db):
     print("Tempo per eseguire tutti gli aggiornamenti: {0:.2}s".format(time.time()-start_time))
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2 or not str(sys.argv[1]).isdigit():
+        print("Ricontrolla il parametro passato al programma (deve essere uno e deve essere o 0 o 1)!")
+        exit(-2)
     client = pymongo.MongoClient(CONN_STR)
     
     db = client[DB_NAME]
@@ -430,39 +433,40 @@ if __name__ == "__main__":
     print("Time to solve query 3 --> {0:.2}s".format(time.time()-start_q3))
     print("CC3("+starting_customer_id+"): ", cc3)
     
-#QUERY 4
-
-    print("\nQUERY 4\n")
-    start_q4=time.time()
     
-    pipeline = [
-        {
-            "$group": {
-                "_id": "$period_of_day",
-                "totalTransactions": {"$sum": 1},
-                "fraudulentTransactions": {
-                    "$sum": {"$cond": ["$TX_FRAUD", 1, 0]}
+    if sys.argv[1] == 1:
+        update_ops(db=db)
+        #QUERY 4
+
+        print("\nQUERY 4\n")
+        start_q4=time.time()
+        
+        pipeline = [
+            {
+                "$group": {
+                    "_id": "$period_of_day",
+                    "totalTransactions": {"$sum": 1},
+                    "fraudulentTransactions": {
+                        "$sum": {"$cond": ["$TX_FRAUD", 1, 0]}
+                    }
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "periodOfDay": "$_id",
+                    "totalTransactions": 1,
+                    "avgFraudulentTransactions": {
+                        "$divide": ["$fraudulentTransactions", "$totalTransactions"]
+                    }
                 }
             }
-        },
-        {
-            "$project": {
-                "_id": 0,
-                "periodOfDay": "$_id",
-                "totalTransactions": 1,
-                "avgFraudulentTransactions": {
-                    "$divide": ["$fraudulentTransactions", "$totalTransactions"]
-                }
-            }
-        }
-    ]
+        ]
 
-    result = list(db.transactions.aggregate(pipeline))
-    
-    print("Time to solve query 4 --> {0:.2}s".format(time.time()-start_q4))
-    
-    for elem in result:
-        print(elem)
-    
-    update_ops(db=db)
+        result = list(db.transactions.aggregate(pipeline))
+        
+        print("Time to solve query 4 --> {0:.2}s".format(time.time()-start_q4))
+        
+        for elem in result:
+            print(elem)
     
