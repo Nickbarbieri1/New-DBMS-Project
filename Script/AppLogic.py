@@ -434,7 +434,7 @@ if __name__ == "__main__":
     print("CC3("+starting_customer_id+"): ", cc3)
     
     
-    if sys.argv[1] == 1:
+    if sys.argv[1] == "1": #ci sono da eseguire gli update
         update_ops(db=db)
         #QUERY 4
 
